@@ -1,0 +1,81 @@
+{
+   "expt_tag": "se_dicebce_l2",
+   "logdir": "./expt_logs/",
+   "data_directory": "/physionet/training_data/",
+   "model_directory": "/physionet/model/",
+   "model_name": "trans",
+   "num_epochs": 25,
+   "batch_size": 60,
+   "kept_classes": 26,
+   "shuffle_dataset": true,
+   "validation_split": 0.25,
+   "leads": [
+      "I",
+      "II",
+      "III",
+      "aVR",
+      "aVL",
+      "aVF",
+      "V1",
+      "V2",
+      "V3",
+      "V4",
+      "V5",
+      "V6"
+   ],
+   "list_leads": [
+      "I",
+      "II",
+      "III",
+      "aVR",
+      "aVL",
+      "aVF",
+      "V1",
+      "V2",
+      "V3",
+      "V4",
+      "V5",
+      "V6"
+   ],
+   "equivalent_classes": [
+      [
+         "713427006",
+         "59118001"
+      ],
+      [
+         "284470004",
+         "63593006"
+      ],
+      [
+         "427172004",
+         "17338001"
+      ],
+      [
+         "733534002",
+         "164909002"
+      ]
+   ],
+   "normal_class": [
+      "426783006"
+   ],
+   "scoring_weights_csv": "weights.csv",
+   "dx_mapping_csv": "dx_mapping_scored.csv",
+   "n_folds": 5,
+   "fold_idx": 0,
+   "ntoken": 256,
+   "emsize": 512,
+   "nhead": 8,
+   "nhid": 128,
+   "nlayers": 6,
+   "nchanels": 1,
+   "dropout": 0.5,
+   "model": "se",
+   "criterion": "dicebce",
+   "optimizer": "adam_l2",
+   "adam_lr": 0.0001,
+   "adam_weight_decay":1e-8,
+   "noam_d_model": 512,
+   "scheduler": "step",
+   "step_step_size": 33,
+   "step_gamma": 0.45
+}
