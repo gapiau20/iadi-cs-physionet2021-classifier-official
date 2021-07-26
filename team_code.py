@@ -257,7 +257,7 @@ def run_experiment(data_directory,model_directory,expt):
     }
     scheduler = schedulers[expt.scheduler]
     
-        ################################
+    ################################
     ## Tensorboard Initialization ##
     ################################
 
@@ -284,7 +284,7 @@ def run_experiment(data_directory,model_directory,expt):
 
 
     model_path = model_directory+ "/best_" + model_name + ".pt"
-    model_checkpoint = utils.ModelCheckpoint(model_path)
+
         #############################
     ## Training and Validation ##
     #############################        
@@ -296,21 +296,12 @@ def run_experiment(data_directory,model_directory,expt):
         train_loss, train_acc,train_f1,train_cmetric = utils.train(model, trainloader, criterion, optimizer, device, weights, classes, normal_class,model_name,writer)
         print(f'Training : Epoch [{epoch+1}/{num_epochs}],Loss [{train_loss:.4f}], Accuracy [{train_acc:.4f}], F1_score [{train_f1:.4f}], Challenge_metric [{train_cmetric:.4f}]')
 
-        # if epoch==num_epochs-4 :
-        #     print('test intitializing a new model')
-        #     model = new_model.ConvNetSEClassifier().to(device)
-        # if epoch ==num_epochs-3:
-        #     print('test loading best model')
-        #     print(model_path)
-        #     model.load_state_dict(torch.load(model_path))
-        
+               
         model.eval()
         confusion_matrix, val_loss, val_acc,val_f1,val_cmetric = utils.valid(model, validloader, criterion, device, weights, classes, normal_class,model_name)#chalenge_classes
         print(f'Validation : Epoch [{epoch+1}/{num_epochs}], Loss [{val_loss:.4f}], Accuracy [{val_acc:.4f}], F1_score [{val_f1:.4f}], Challenge_metric [{val_cmetric:.4f}]')
         
-        #Print_confusion_matrix
-        print('Printing confusion matrix of epoch'+str(epoch))
-
+        
         #save best model
         if best_metric_val is None or val_cmetric>best_metric_val:
         #if True:
@@ -323,33 +314,13 @@ def run_experiment(data_directory,model_directory,expt):
             print('val_cmetric',val_cmetric,'best_metric_val',best_metric_val)
 
         
-        fig, ax = plt.subplots(7, 4, figsize=(10, 8))
-        for axes, cfs_matrix, classe_name in zip(ax.flatten(), confusion_matrix, challenge_classes):
-            utils.print_confusion_matrix(cfs_matrix, axes, classe_name, ['N','Y'])
-        fig.text(0.5, 0.04, 'True', ha='center')
-        fig.text(0.04, 0.5, 'Predicted ', va='center', rotation='vertical')
-        #plt.savefig('confusion_matrix_epoch_'+str(epoch)+'.png')
         
         scheduler.step()
+
+
         print('Epoch-{0} lr: {1}'.format(epoch+1, optimizer.param_groups[0]['lr']))
 
-        history_file.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(epoch,
-                                                        train_loss, train_acc,train_f1,train_cmetric,
-                                                        val_loss, val_acc,val_f1,val_cmetric,optimizer.param_groups[0]['lr']))
-        #model_checkpoint.update(val_loss, model)
-    
-        #########################################################################
-        writer.add_scalar('Loss/train', train_loss, epoch)
-        writer.add_scalar('Loss/validation',val_loss , epoch)
-        writer.add_scalar('Acuuracy/train', train_acc, epoch)
-        writer.add_scalar('Acuuracy/validation', val_acc, epoch)
-        writer.add_scalar('training_F1', train_f1 , epoch) 
-        writer.add_scalar('ChallengeMetric/train', train_cmetric , epoch) 
-       
-        
-        writer.add_scalar('validation_F1', val_f1 , epoch) 
-        writer.add_scalar('ChallengeMetric/validation', val_cmetric , epoch) 
-        writer.add_scalar('Learning_rate', optimizer.param_groups[0]['lr'] , epoch) 
+	
     
     end_time = datetime.now()
     print('Time of execution of train.py is : {}'.format(end_time - start_time))
@@ -425,11 +396,6 @@ def run_model(model, header, recording):
         final_labels = final_labels.detach().to('cpu').numpy().flatten()
         probabilities = probabilities.detach().to('cpu').numpy().flatten()
 
-        #for debugging purpose
-        #plot the ecg record
-        fig, ax = plt.subplots( nrows=1, ncols=1 )  # create figure & 1 axis
-        ax.plot(recordings_tensor.T)
-        fig.savefig("/physionet/ecg.png")
         
 
 
