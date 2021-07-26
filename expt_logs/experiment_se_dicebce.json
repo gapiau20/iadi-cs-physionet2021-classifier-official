@@ -4,7 +4,7 @@
    "data_directory": "/physionet/training_data/",
    "model_directory": "/physionet/model/",
    "model_name": "trans",
-   "num_epochs": 25,
+   "num_epochs": 50,
    "batch_size": 60,
    "kept_classes": 26,
    "shuffle_dataset": true,
@@ -76,6 +76,6 @@
    "adam_weight_decay":1e-8,
    "noam_d_model": 512,
    "scheduler": "step",
-   "step_step_size": 33,
-   "step_gamma": 0.45
+   "step_step_size": 15,
+   "step_gamma": 0.68
 }
