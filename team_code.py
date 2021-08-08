@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+3#!/usr/bin/env python
 
 # Edit this script to add your team's training code.
 # Some functions are *required*, but you can edit most parts of the required functions, remove non-required functions, and add your own functions.
@@ -34,6 +34,7 @@ import warnings
 warnings.filterwarnings('ignore')
 import numpy as np, os, sys, joblib
 import pickle
+import json
 import random
 import argparse
 from pathlib import Path
@@ -45,7 +46,7 @@ import torch.nn as nn
 from torch import optim
 from torch.utils.data import TensorDataset, DataLoader, sampler
 from torch.utils.tensorboard import SummaryWriter
-from  torch.optim.lr_scheduler import StepLR
+from  torch.optim.lr_scheduler import StepLR,CosineAnnealingWarmRestarts,CyclicLR,LambdaLR
 from models_2020 import Conv1DNet, Conv2DNet,resnet18, resnet34, resnet50, resnet101
 import utils
 from datetime import datetime
@@ -57,12 +58,19 @@ torch.cuda.manual_seed(42)
 # Train your model. This function is *required*. Do *not* change the arguments of this function.
 def training_code(data_directory, model_directory):
     expt_dir = '/physionet/expt_logs/'
-    expt_files = os.listdir(expt_dir)
+    expt_files = sorted(os.listdir(expt_dir))
     print(expt_files)
+    architectures, model_names, thresholds = [],[],[]
     for f in expt_files : 
         expt = exp_supervision.ExpSupervisor(data_dir=data_directory,model_dir=model_directory)
         expt.load(os.path.join(expt_dir,f))
-        run_experiment(data_directory, model_directory,expt)
+        arch, mod_name, thr = run_experiment(data_directory, model_directory,expt)
+        architectures.append(arch)
+        model_names.append(model_names)
+        thresholds.append(thresholds)
+    
+
+
     # n_cpu=4
     # pool = mp.Pool(n_cpu)
     # pool.starmap(launch_expt,[(data_directory,model_directory,expt_dir,f) for f in expt_files])
@@ -99,8 +107,8 @@ def run_experiment(data_directory,model_directory,expt):
 
     # Hyperparameters
     device = torch.device('cuda')
-    model_name =expt.model_name
-    num_epochs = expt.num_epochs#40
+    model_name =expt.expt_tag
+    num_epochs = expt.num_epochs
     batch_size = expt.batch_size
 
 
@@ -146,7 +154,7 @@ def run_experiment(data_directory,model_directory,expt):
     
     print('Creating DataLoaders...')
     
-        #########################################
+    #########################################
     ## Train, valid Data loader definition ##
     #########################################
     tmp=recordings_tensor
@@ -161,22 +169,45 @@ def run_experiment(data_directory,model_directory,expt):
     print('first fold iteration')
     print('training size ',len(train_idx))
     print('val size',len(val_idx))
-
+    #get the indices where the files are
+    train_headers = [header_files[i] for i in train_idx]
     tmp_train=[tmp[i] for i in train_idx]
     labels_train=[labels_tensor[i] for i in train_idx]
+
+
+    databases = expt.databases
+    #lists
+    train_headers,tmp_train,labels_train,batch_weights=utils.order_databases(
+        train_headers,tmp_train,labels_train,
+        databases)
+
+    if expt.weight_batches==True:
+        print('weighting_batches')
+        batch_weights=utils.weight_db_classes(train_headers,batch_weights,dx_mapping_csv,challenge_classes)
+
+    else :
+        print('not weighting batches')
+    print('batch_weights shape',batch_weights[0].size())
     labels_val=[labels_tensor[i] for i in val_idx]
     tmp_val=[tmp[i] for i in val_idx]
     
 
   
-    ####################reshape the train tensors##################
+    ####################reshape the train tensors (records, labels, weights)##################
+    #stack the lists into tensors
     tmp_train=torch.stack(tmp_train)
     labels_train=torch.stack(labels_train)
+    batch_weights=torch.stack(batch_weights)
     records_train=tmp_train[:,0,:]
     new_labels_train=labels_train
+    new_weights_train=batch_weights
+    
     for i in range(1,tmp_train.shape[1]):
         records_train=torch.cat((records_train,tmp_train[:,i,:]),0)
         new_labels_train=torch.cat((new_labels_train,labels_train))
+        new_weights_train=torch.cat((new_weights_train,batch_weights))
+    print('size new_labels_train',new_labels_train.size())
+    print('size new_weights_train',new_weights_train.size())
     print('new_labels_train sum', new_labels_train.sum(dim=0))
     print('records_train shape',records_train.size())
     print('each lead is considered as 1 sample (batch dimension)')
@@ -185,7 +216,8 @@ def run_experiment(data_directory,model_directory,expt):
 
     dataset_train = records_dataset(
         files=records_train,
-        labels=new_labels_train
+        labels=new_labels_train,
+        weights=new_weights_train
                              )
 
     ####################reshape the validation tensors##################
@@ -224,13 +256,16 @@ def run_experiment(data_directory,model_directory,expt):
     models = nn.ModuleDict({
         'nora':new_model.OldNora_ConvNet(),
         'noraTransform':new_model.NoraTransform(),
-        'se':new_model.ConvNetSEClassifier(),
-        #'seTransform':new_model.SETransformer()
+        'se':new_model.ConvNetSEClassifier(dropout=expt.dropout),
+        'seTransform':new_model.SETransformer()
     })
     model = models[expt.model]
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
+    if expt.retraining:
+        print('starting from a pretrained model : ',expt.pretrained_model_name)
+        utils.load_pretrained_model(model, expt.pretrained_model_name,model_directory)
 
     # Loss and optimizer
     pos_weight = pos_weight.to(device)#class weight to same device as the other tensors
@@ -243,19 +278,36 @@ def run_experiment(data_directory,model_directory,expt):
         'dicebce':new_model.DiceBCELoss(classes_weights=pos_weight),
         'dicesign':new_model.DiceSignLoss(classes_weights=pos_weight)
     }
+    
     criterion = criteria[expt.criterion]
 
     optimizers= {
+        'sgd':torch.optim.SGD(model.parameters(), lr=expt.adam_lr, momentum=0.9),
         'adam':torch.optim.Adam(model.parameters(), lr=expt.adam_lr),
         'adam_l2':torch.optim.Adam(model.parameters(),lr=expt.adam_lr, weight_decay=expt.adam_weight_decay),
         'noam':NoamOptimizer(model.parameters(), d_model=expt.noam_d_model)
     }
     optimizer = optimizers[expt.optimizer] 
 
+    #schedulers for each epoch
+
+    #lambda lr (warmup and decay)
+    eta = expt.adam_lr#max lr for lambda function
+    Twarm = num_epochs//5#warmup time
+ #   lambda1 = lambda epoch : eta*epoch/Twarm if epoch <Twarm else 0.5*(1+torch.cos(np.pi*epoch/num_epochs))*eta
     schedulers = {
-        'step':StepLR(optimizer, step_size=expt.step_step_size, gamma=expt.step_gamma)
+        'step':StepLR(optimizer, step_size=expt.step_step_size, gamma=expt.step_gamma),
+#        'lambda':LambdaLR(optimizer,lr_lambda=lambda1)
     }
     scheduler = schedulers[expt.scheduler]
+    #schedulers for every batch iteration
+    lr_schedulers={
+        'none':None,
+        'cyclic':CyclicLR(optimizer,base_lr=expt.cyclic_base_lr,max_lr=expt.cyclic_max_lr),
+#        'cyclic':CyclicLR(optimizer,base_lr=expt.cyclic_base_lr,max_lr=expt.cyclic_max_lr,mode=expt.cyclic_mode,gamma=expt.cyclic_gamma),
+        'cos':CosineAnnealingWarmRestarts(optimizer,expt.cos_T0,eta_min=expt.cos_eta_min),
+        }
+    lr_scheduler = lr_schedulers[expt.lr_scheduler]
     
     ################################
     ## Tensorboard Initialization ##
@@ -284,7 +336,7 @@ def run_experiment(data_directory,model_directory,expt):
 
 
     model_path = model_directory+ "/best_" + model_name + ".pt"
-
+    model_checkpoint = utils.ModelCheckpoint(model_path)
         #############################
     ## Training and Validation ##
     #############################        
@@ -293,15 +345,17 @@ def run_experiment(data_directory,model_directory,expt):
     for epoch in range(num_epochs):
         model.train()
         
-        train_loss, train_acc,train_f1,train_cmetric = utils.train(model, trainloader, criterion, optimizer, device, weights, classes, normal_class,model_name,writer)
+        train_loss, train_acc,train_f1,train_cmetric = utils.train(model, trainloader, criterion, optimizer,lr_scheduler ,device, weights, classes, normal_class,model_name,writer)
         print(f'Training : Epoch [{epoch+1}/{num_epochs}],Loss [{train_loss:.4f}], Accuracy [{train_acc:.4f}], F1_score [{train_f1:.4f}], Challenge_metric [{train_cmetric:.4f}]')
 
-               
+        
         model.eval()
         confusion_matrix, val_loss, val_acc,val_f1,val_cmetric = utils.valid(model, validloader, criterion, device, weights, classes, normal_class,model_name)#chalenge_classes
         print(f'Validation : Epoch [{epoch+1}/{num_epochs}], Loss [{val_loss:.4f}], Accuracy [{val_acc:.4f}], F1_score [{val_f1:.4f}], Challenge_metric [{val_cmetric:.4f}]')
         
-        
+        #Print_confusion_matrix
+        print('Printing confusion matrix of epoch'+str(epoch))
+
         #save best model
         if best_metric_val is None or val_cmetric>best_metric_val:
         #if True:
@@ -314,13 +368,33 @@ def run_experiment(data_directory,model_directory,expt):
             print('val_cmetric',val_cmetric,'best_metric_val',best_metric_val)
 
         
+        fig, ax = plt.subplots(7, 4, figsize=(10, 8))
+        for axes, cfs_matrix, classe_name in zip(ax.flatten(), confusion_matrix, challenge_classes):
+            utils.print_confusion_matrix(cfs_matrix, axes, classe_name, ['N','Y'])
+        fig.text(0.5, 0.04, 'True', ha='center')
+        fig.text(0.04, 0.5, 'Predicted ', va='center', rotation='vertical')
+        plt.savefig('confusion_matrix_epoch_'+str(epoch)+'.png')
         
         scheduler.step()
-
-
         print('Epoch-{0} lr: {1}'.format(epoch+1, optimizer.param_groups[0]['lr']))
 
-	
+        history_file.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(epoch,
+                                                        train_loss, train_acc,train_f1,train_cmetric,
+                                                        val_loss, val_acc,val_f1,val_cmetric,optimizer.param_groups[0]['lr']))
+        #model_checkpoint.update(val_loss, model)
+    
+        #########################################################################
+        writer.add_scalar('Loss/train', train_loss, epoch)
+        writer.add_scalar('Loss/validation',val_loss , epoch)
+        writer.add_scalar('Acuuracy/train', train_acc, epoch)
+        writer.add_scalar('Acuuracy/validation', val_acc, epoch)
+        writer.add_scalar('training_F1', train_f1 , epoch) 
+        writer.add_scalar('ChallengeMetric/train', train_cmetric , epoch) 
+       
+        
+        writer.add_scalar('validation_F1', val_f1 , epoch) 
+        writer.add_scalar('ChallengeMetric/validation', val_cmetric , epoch) 
+        writer.add_scalar('Learning_rate', optimizer.param_groups[0]['lr'] , epoch) 
     
     end_time = datetime.now()
     print('Time of execution of train.py is : {}'.format(end_time - start_time))
@@ -334,8 +408,15 @@ def run_experiment(data_directory,model_directory,expt):
     lead_set3 = ['I', 'II', 'V2']
     lead_set2 = [ 'I', 'II']
 
-
-    save_model(model_directory, leads, saved_classes,  model, model_name, recordings_rescaling)#imputer,    
+    #model calibration
+    print('calibration step')
+    thresholds_opt = 0.5
+    #thresholds_opt = utils.calibrate(model, validloader,weights, classes, normal_class, device)
+    
+    
+    save_model(model_directory, leads, saved_classes,  model, model_name, recordings_rescaling,thresholds_opt)#imputer,
+    #return model_directory, leads, saved_classes,  model, model_name, recordings_rescaling
+    return expt.model, model_name, thresholds_opt
 ################################################################################
 #
 # Running trained model function
@@ -368,7 +449,7 @@ def run_model(model, header, recording):
     classifier.load_state_dict(torch.load(model_path))
     Threshold=0.5
     #Threshold = 1e-15
-
+    #Threshold=torch.tensor(model['thresholds']).to(device)
     classifier = classifier.to(device)
     
     #turn into evaluation mode, and don't track gradients
@@ -396,6 +477,11 @@ def run_model(model, header, recording):
         final_labels = final_labels.detach().to('cpu').numpy().flatten()
         probabilities = probabilities.detach().to('cpu').numpy().flatten()
 
+        #for debugging purpose
+        #plot the ecg record
+        # fig, ax = plt.subplots( nrows=1, ncols=1 )  # create figure & 1 axis
+        # ax.plot(recordings_tensor.T)
+        # fig.savefig("/physionet/ecg.png")
         
 
 
@@ -408,11 +494,11 @@ def run_model(model, header, recording):
 ################################################################################
 
 # Save a trained model. This function is not required. You can change or remove it.
-def save_model(model_directory, leads, classes,  classifier,model_name="",rescaling=[]):
+def save_model(model_directory, leads, classes, classifier,model_name="",rescaling=[], thresholds=0.5):
     
     classes = [next(iter(i)) for i in classes]
     d = {'leads': leads, 'classes': classes,  'classifier': classifier,
-         "model_name":model_name,'rescaling':rescaling}#'imputer': imputer,
+         "model_name":model_name,'rescaling':rescaling, 'thresholds':thresholds}#'imputer': imputer,
     filename = os.path.join(model_directory, get_model_filename(leads))
     
     joblib.dump(d, filename, protocol=0)

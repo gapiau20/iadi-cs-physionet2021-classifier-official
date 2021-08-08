@@ -1,12 +1,79 @@
 import math
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import copy
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import models_2020
 
 
 #model for training and validation
+
+
+
+class SETransformer(nn.Module):
+    def __init__(self, num_classes=26):
+        super(SETransformer,self).__init__()
+        #classifier layers
+        num_features=512
+        #num_features=128
+        #num_features=64
+        num_mid = 128
+        dropout=0.5
+        # nhead=8
+        # nhid=2048
+        nhead=4
+        nhid=64
+        self.features = ConvNetSEComponent()
+                    
+    
+                
+
+    # self.global_pool = nn.AdaptiveMaxPool1d(1)
+
+
+        self.model_type = 'SETransformer'
+        self.pos_encoder = PositionalEncoding(num_features, dropout)
+        encoder_layers = TransformerEncoderLayer(num_features, nhead, nhid, dropout)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nhid)
+
+        self.linear=nn.Sequential(nn.Linear(num_features*86, num_features),nn.LeakyReLU())
+        self.linear2=nn.Sequential(nn.Linear(num_features, 64),nn.LeakyReLU())
+        self.linear3=nn.Sequential(nn.Linear(64, 26),nn.LeakyReLU())
+        self.dropout = nn.Dropout(0.3) 
+    
+    def forward(self, inputs,src_mask=None): 
+        act_batch_size = inputs.size(0)
+    
+        #num features=128
+        inputs = inputs.view(act_batch_size, 1, -1)
+        output = self.features(inputs)
+    # print("SE",output.shape)==([60, 512, 86])==(batch,features,temp)
+    
+        
+        #output = self.global_pool(output)
+        print("features",output.shape)
+        output = output.permute(2,0, 1)#(temp,batch,features)
+        output = self.pos_encoder(output)
+        print("pos",output.shape)
+        output = self.transformer_encoder(output)
+        output = output.permute(1,2, 0)
+        print("trans",output.shape)#==([60, 512, 86)=(batch,features,temp)
+
+        output=output.reshape(output.shape[0],output.shape[2]*output.shape[1])
+        print("trans",output.shape)#==(batch,linear_dim)
+    
+        output=self.linear(output)
+        output=self.linear2(output)
+        output=self.linear3(output)
+        return output
+
+
+    def generate_square_subsequent_mask(self, sz):
+        return torch.zeros(sz, sz)
+
+
 
 
 
@@ -183,12 +250,13 @@ class ConvNetSEComponent(nn.Module):
     modified by adding squeeze excitation layers
     https://arxiv.org/pdf/1709.01507.pdf
     """
-    def __init__(self):
+    def __init__(self,dropout=0.5):
         super(ConvNetSEComponent, self).__init__()
 
         #self.channel_sizes = [16, 32, 32, 32, 32, 64, 64, 64, 64, 128, 128]
         self.channel_sizes = [16, 32, 32, 64, 64, 128, 128, 128, 128, 256, 256,256,256,512,512,512]
         kernel_size =11
+        self.dropout=dropout
         self.features = nn.Sequential( 
             
             #16
@@ -277,7 +345,7 @@ class ConvNetSEComponent(nn.Module):
             nn.Conv1d(self.channel_sizes[11], self.channel_sizes[12], kernel_size=kernel_size), #,stride=(2,1)
             nn.BatchNorm1d(self.channel_sizes[12]),
             nn.ReLU(),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=self.dropout),
             SEInceptionLayer(self.channel_sizes[12]),
 
 
@@ -288,20 +356,20 @@ class ConvNetSEComponent(nn.Module):
             nn.Conv1d(self.channel_sizes[12], self.channel_sizes[13], kernel_size=kernel_size), #,stride=(2,1)
             nn.BatchNorm1d(self.channel_sizes[13]),
             nn.ReLU(),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=self.dropout),
             SEInceptionLayer(self.channel_sizes[13]),
             
             nn.Conv1d(self.channel_sizes[13], self.channel_sizes[14], kernel_size=kernel_size), #,stride=(2,1)
             nn.BatchNorm1d(self.channel_sizes[14]),
             nn.ReLU(),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=self.dropout),
             SEInceptionLayer(self.channel_sizes[14]),
 
 
             nn.Conv1d(self.channel_sizes[14], self.channel_sizes[15], kernel_size=kernel_size), #,stride=(2,1)
             nn.BatchNorm1d(self.channel_sizes[15]),
             nn.ReLU(),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=self.dropout),
             SEInceptionLayer(self.channel_sizes[15]),
 
 
@@ -317,12 +385,13 @@ class ConvNetSEComponent(nn.Module):
 
 class ConvNetSEClassifier(nn.Module):
     """modification using se blocks for feature extraction instead"""
-    def __init__(self,num_classes=26):
-        super(ConvNetSEClassifier, self).__init__()
+    def __init__(self,num_classes=26,dropout=0.5):
+        super(ConvNetSEClassifier,self).__init__()
         #9 classsifers
         num_features = 512
         num_mid = 128
-        self.features =  ConvNetSEComponent()
+        self.dropout=dropout
+        self.features =  ConvNetSEComponent(dropout=self.dropout)
         self.global_pool = nn.AdaptiveMaxPool1d(1)
         self.classifier = nn.Linear(num_features, num_classes)
         self.classifier = nn.Sequential(nn.Linear(num_features,
@@ -562,16 +631,21 @@ class NoamOptimizer(Adam):
 
 from torch.utils.data import Dataset, DataLoader
 class records_dataset(Dataset):
-    def __init__(self,  files, labels=None):  
+    def __init__(self,  files, labels=None, weights=None):  
         self.records = files
         self.labels = labels
-
+        self.weights = weights
+        if self.weights==None and self.labels!=None:
+            self.weights=torch.ones_like(self.labels)
+        
     def __len__(self):
         return len(self.records)
 
     def __getitem__(self, idx):
         record = self.records[idx]
-        if self.labels is not None:
+        if self.labels is not None and self.weights is not None:
+            return record, self.labels[idx],self.weights[idx]
+        elif self.labels is not None :
             return record, self.labels[idx]
         else:
             return record
@@ -676,9 +750,14 @@ class DiceBCELoss(nn.Module):
         super(DiceBCELoss, self).__init__()
         self.BCELoss = nn.BCEWithLogitsLoss(reduction='mean',pos_weight=classes_weights,weight=weight)
         self.name=("DiceBCELoss")
-    def forward(self, inputs, targets, smooth=1):
-        
+    def forward(self, inputs, targets,  weight=None, smooth=1):
+
+        self.BCELoss.weight=weight
+        print('in dice bce, pred size', inputs.size())
+        if self.BCELoss.weight!=None:
+            print('in dicebce, bcd weights size',self.BCELoss.weight.size())
         BCE = self.BCELoss(inputs, targets)
+        print('in dicebce BCE ',BCE)
         inputs = F.sigmoid(inputs)
         
         
@@ -719,3 +798,29 @@ class DiceLoss(nn.Module):
 
 
 
+class EnsembleModel(nn.Module):
+    '''class to make ensemble model prediction from several models
+    model_module_dict : moduledict that contains the different architectures used for the ensemble model
+    model_names : keys for related moduledict containing the available architectures
+    model_params : name of the .pt files where the model params are stored
+    model_thresholds : thresholds for multilabel classification tasks (tensor of size Nclasses)
+    '''
+    def __init__(self,model_module_dict, model_names=[],model_params=[], model_dir = './'):
+        super(EnsembleModel,self).__init__()
+        self.module_dict = model_module_dict
+        self.models =nn.ModuleList([copy.deepcopy(self.module_dict[key]) for key in model_names])
+
+        #for each model load its corresponding parameters
+        for i in range(len(self.models)) :
+            model_path = os.path.join(model_dir, model_params[i])
+            self.models[i].load_state_dict(torch.load(model_path))
+            
+        return
+
+    def forward(self, inputs,mask=None):
+        preds =torch.stack( [m(inputs) for m in self.models])
+        probs = torch.mean(preds,dim=0)
+        return probs
+
+    def generate_square_subsequent_mask(self, sz):
+        return torch.zeros(sz, sz)

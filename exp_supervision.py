@@ -39,6 +39,7 @@ class ExpSupervisor():
         self.scoring_weights_csv ='weights.csv'
         self.dx_mapping_csv ='dx_mapping_scored.csv'
 
+        self.databases = ["None"]
         self.n_folds = 5
         self.fold_idx=0
 
@@ -49,7 +50,11 @@ class ExpSupervisor():
         self.nlayers=6
         self.nchanels=1
         self.dropout=0.5
-
+        #key to tell whether the experiment is a retrain of a pretrained model, or not
+        self.retraining=False
+        self.pretrained_model_name=None
+        #key to tell if the batch samples should have a different weighting among classes
+        self.weight_batches=False
         #key of the corresponding criteria moduledicts in the team_code.py training_code
         self.model = 'se'
         self.criterion = 'bcelogits'
@@ -61,12 +66,22 @@ class ExpSupervisor():
         
         #parameters for 'noam' optimizer
         self.noam_d_model=512
-        
         self.scheduler = 'step'
         #parameters for 'step' scheduler
         self.step_step_size = 33
         self.step_gamma = 0.45
-        
+
+        #lr_scheduler (scheduler for every batch iter)
+        self.lr_scheduler=None
+        #'cyclic' lr_scheduler
+        self.cyclic_base_lr=5e-5
+        self.cyclic_max_lr=1e-3
+        self.cyclic_mode='triangular'
+        self.cyclic_gamma=1
+        #'cos' scheduler
+        self.cos_T0=2000
+        self.cos_eta_min=5e-5
+
         
         return
         

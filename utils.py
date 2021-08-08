@@ -31,6 +31,93 @@ from helper_code import *
 
 classes_names = ['maladie_'+str(i+1) for i in range(26)]
 
+def order_databases(header_list, record_list, one_hot_labels, databases=["None"]):
+    """
+    "I" incart
+    "E" georgia
+    "HR" ptb xl
+    "S" 
+    "JS" chapman (the new one)
+    "Q" cpsc complement
+    "A" cpsc
+    """
+    headers,records,labels,weights= [],[],[],[]
+    for idx in range(len(header_list)):
+        for db in databases:
+            #if ptb, disambiguate ptb from ningbo tag
+            if db=="S":
+                if not "JS" in header_list[idx]:
+                    headers.append(header_list[idx])
+                    records.append(record_list[idx])
+                    labels.append(one_hot_labels[idx])
+                    weights.append(torch.ones_like(one_hot_labels[idx]))
+            #if "None", no db filtering
+            #else, add the sample only if it is in the selected db
+            elif db=="None" or db in header_list[idx]:
+                headers.append(header_list[idx])
+                records.append(record_list[idx])
+                labels.append(one_hot_labels[idx])
+                weights.append(torch.ones_like(one_hot_labels[idx]))
+            
+    
+    return headers,records, labels, weights
+
+def weight_db_classes(headers_list,weights_list,csv_dx_mapping_file,scored_classes):
+    #dataframe from mapping csv file
+    db_df = pd.read_csv(csv_dx_mapping_file)
+    databases = ["I","Q","A","E","HR","S","JS"]
+    #map the db tag of filenames to csv dbtag
+    db2csv_map = {
+        'I':'StPetersburg',
+        'Q':'CPSC_Extra',
+        'A':'CPSC',
+        'E':'Georgia',
+        'HR':'PTB_XL',
+        'S':'PTB',
+        'JS':'Ningbo'
+        }
+    
+    weights = []
+    for idx in range(len(headers_list)):
+        #assign the db of the sample
+        for db in databases:
+            #disambiguate the database btw ptb and ningbo
+            if db=="S":
+                if db in headers_list[idx] and "JS" not in headers_list[idx]:
+                    record_db = "S"
+            else : 
+                if db in headers_list[idx]:
+                    record_db = db
+        #get the distrib among scored classes
+        db_distrib, db_distrib_total = [],[]
+        for cls in scored_classes:
+            db_num_pos = db_df[db_df['SNOMEDCTCode']==int(cls)][db2csv_map[record_db]].to_numpy()
+            glob_num_pos = db_df[db_df['SNOMEDCTCode']==int(cls)]['Total'].to_numpy()
+            db_distrib.append(db_num_pos)#db_df[db2csv_map[record_db]].to_numpy()
+            db_distrib_total.append(glob_num_pos)
+        db_distrib = np.array(db_distrib)
+        db_distrib_total=np.array(db_distrib_total)
+        
+        #w = (db_distrib/db_distrib.sum()).reshape((len(db_distrib)))#p(class|database)
+#        C = (db_distrib_total/db_distrib_total.sum()).reshape((len(db_distrib)))#p(classes)
+        #C = (1/db_distrib_total.sum())
+        #C = 1
+        #w = w/C
+        w = (db_distrib>0).astype(np.float).reshape((len(db_distrib)))
+        weights.append(torch.from_numpy(w))
+                                                
+    return weights
+
+def load_pretrained_model(model=None, pretrained_model_name=None, model_dir="./"):
+    if pretrained_model_name == None :
+        return
+    else :
+        model_path = os.path.join(model_dir,pretrained_model_name)
+        print('retraining from a previous model')
+        print('loading : ', model_path)
+        model.load_state_dict(torch.load(model_path))
+    return
+
 def max_predict(preds):
     #predictions = torch.stack(preds)
     predictions = preds
@@ -183,13 +270,20 @@ def multilead_predict(data_tensor, classifier, threshold, device="cpu", requires
     #labels = torch.ones_like(labels)
     return probabilities, labels
 
-
-def train(model, loader, f_loss, optimizer ,device, weights, classes, normal_class,model_name,writer):
+def multilead_compute(data_tensor,model):
+    sz = data_tensor.size() #BatchxLeadsxTime
+    model_output = model(data_tensor.view(sz[0]*sz[1],1,sz[2]).to(device))
+    #transform (Batch*Leads)xTime-->(Batch*Leads)xEmbeddingxTime
+    sz_output = model_output.size()
+    model_output = model_output.view(sz[0],sz[1],sz_output[1],sz_output[2])#(Batch x Leads x Embedding x Time)
+    return model_output
+    
+def train(model, loader, f_loss, optimizer,lr_scheduler ,device, weights, classes, normal_class,model_name,writer):
     threshold = 0.5
     preds, targets, loss = [],[],[]
-    for i, (recordings, labels) in enumerate(tqdm.tqdm(loader)):
+    for i, (recordings, labels, batch_weights) in enumerate(tqdm.tqdm(loader)):
 
-        recordings, labels = recordings.to(device), labels.to(device)
+        recordings, labels, batch_weights = recordings.to(device), labels.to(device), batch_weights.to(device)
         
         
         src_mask = model.generate_square_subsequent_mask(recordings.size(0)).to(device)
@@ -197,12 +291,14 @@ def train(model, loader, f_loss, optimizer ,device, weights, classes, normal_cla
         outputs = model(recordings, src_mask)
         
         #outputs = model(recordings)
-        train_loss = f_loss(outputs, labels)
+        train_loss = f_loss(outputs, labels, batch_weights)
 
         # Backprop and perform Adam optimisation
         optimizer.zero_grad()
         train_loss.backward()
         optimizer.step()
+        if lr_scheduler!=None:
+            lr_scheduler.step()
         
         #stack tensors to compute training metrics
         loss.append(train_loss)
@@ -216,7 +312,9 @@ def train(model, loader, f_loss, optimizer ,device, weights, classes, normal_cla
    # preds = torch.ones_like(preds)
     preds = preds.to('cpu').detach().numpy()
     targets = torch.cat(targets).to('cpu').detach().numpy()
-        
+
+    print('in train, preds size',preds.shape)
+    print('in train, targets size',targets.shape)
     running_accuracy = compute_accuracy(targets,preds)
     F1_Score , F1_Score_classe = compute_f_measure(targets,preds)
     challenge_metric = compute_challenge_metric(weights, targets, preds, classes, normal_class)
@@ -228,7 +326,7 @@ def valid(model, loader, f_loss, device, weights, classes, normal_class,model_na
 
     with torch.no_grad():
         preds, targets, loss = [],[],[]
-        for i, (valid_recordings, valid_labels) in enumerate(tqdm.tqdm(loader)):
+        for i, (valid_recordings, valid_labels, valid_batch_weights) in enumerate(tqdm.tqdm(loader)):
             
             valid_recordings, valid_labels = valid_recordings.to(device),valid_labels.to(device)
   
@@ -555,6 +653,30 @@ def compute_f_measure(labels, outputs):
 
     return macro_f_measure, f_measure
 
+# compute fmeasure per class
+def compute_f_measure_perclass(labels,outputs):
+    num_recordings, num_classes = np.shape(labels)
+
+    A = compute_confusion_matrices(labels, outputs)
+
+    f_measure = np.zeros(num_classes)
+    f_measure_per_class = []
+    for k in range(num_classes):
+        tp, fp, fn, tn = A[k, 1, 1], A[k, 1, 0], A[k, 0, 1], A[k, 0, 0]
+        if 2 * tp + fp + fn:
+            f_measure[k] = float(2 * tp) / float(2 * tp + fp + fn)
+            f_measure_per_class.append(f_measure[k])
+        else:
+            f_measure[k] = float('nan')
+            f_measure_per_class.append(f_measure[k])
+
+    if np.any(np.isfinite(f_measure)):
+        macro_f_measure = np.nanmean(f_measure)
+    else:
+        macro_f_measure = float('nan')
+
+    return macro_f_measure, f_measure, f_measure_per_class
+
 # Compute recording-wise accuracy.
 def compute_accuracy(labels, outputs):
     num_recordings, num_classes = np.shape(labels)
@@ -616,3 +738,54 @@ def compute_challenge_metric(weights, labels, outputs, classes, normal_class):
         normalized_score = 0.0
 
     return normalized_score
+
+
+def calibrate(model,loader,weights, classes,normal_class, device):
+    '''
+    thresholds : list of thresholds
+    '''
+    #evaluation mode
+    model.eval()
+    values = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]
+
+    threshold = torch.zeros((1,len(classes))).to('cpu')
+    best_metric=-1
+    #compute the classifier output probabilities
+    with torch.no_grad():
+        probs,targets,loss = [],[],[]
+        for i,(valid_recordings,valid_labels,valid_batch_weights) in enumerate(tqdm.tqdm(loader)):
+            sz = valid_recordings.size()#batchxnchannelsxtime
+            mask = model.generate_square_subsequent_mask(sz[0])
+            #get probabilities
+            clf_output= torch.sigmoid((model(valid_recordings.view(sz[0]*sz[1],1,sz[2]).to(device),mask)))
+            sz_clf = clf_output.size()
+            #(batch*nchannels)xnclasses
+            clf_output = clf_output.view(sz[0],sz[1],sz_clf[1])
+            #(batchxnchannelsxnclasses)
+            probabilities = torch.mean(clf_output,dim=1).view(sz[0],sz_clf[1])
+            #add the preds and labels tensors
+            probs.append(probabilities)
+            targets.append(valid_labels)
+        #stack probabilities and targets
+        probabilities = torch.cat(probs).to('cpu')
+        labels = torch.cat(targets).to('cpu').detach().numpy()
+        for idx in range(threshold.size(-1)):
+            best_thr_idx = 0
+            for thr in values :
+                threshold[0,idx]=thr
+                preds = (probabilities>threshold).int()
+                preds = preds.to('cpu').detach().numpy()#numpy for computing challenge metric
+           
+                challenge_metric = compute_challenge_metric(weights,labels,preds,classes,normal_class)
+                print('idx',idx,'val',thr,'challenge metric',challenge_metric)
+                #if better challenge metric with the threshold
+                if challenge_metric > best_metric:
+                    best_idx_thr = thr
+                    best_metric = challenge_metric
+            #set the best threshold at the idx
+            threshold[0,idx] = best_idx_thr
+
+    threshold = threshold.tolist() #threshold as list (for saving)
+    print('best threshold, best metric: ',threshold, ' ',best_metric)
+    return threshold
+            
