@@ -17,17 +17,16 @@ class SETransformer(nn.Module):
         super(SETransformer,self).__init__()
         #classifier layers
         num_features=512
-        #num_features=128
-        #num_features=64
         num_mid = 128
         dropout=0.5
         # nhead=8
         # nhid=2048
-        nhead=4
-        nhid=64
+        nhead=8
+        nhid=2048
+        nenclayers=8
         self.features = ConvNetSEComponent()
                     
-    
+       # self.features = SEEmbedding()
                 
 
     # self.global_pool = nn.AdaptiveMaxPool1d(1)
@@ -36,9 +35,10 @@ class SETransformer(nn.Module):
         self.model_type = 'SETransformer'
         self.pos_encoder = PositionalEncoding(num_features, dropout)
         encoder_layers = TransformerEncoderLayer(num_features, nhead, nhid, dropout)
-        self.transformer_encoder = TransformerEncoder(encoder_layers, nhid)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nenclayers)
 
         self.linear=nn.Sequential(nn.Linear(num_features*86, num_features),nn.LeakyReLU())
+        #self.linear=nn.Sequential(nn.Linear(num_features*587, num_features),nn.LeakyReLU())
         self.linear2=nn.Sequential(nn.Linear(num_features, 64),nn.LeakyReLU())
         self.linear3=nn.Sequential(nn.Linear(64, 26),nn.LeakyReLU())
         self.dropout = nn.Dropout(0.3) 
@@ -51,7 +51,7 @@ class SETransformer(nn.Module):
         output = self.features(inputs)
     # print("SE",output.shape)==([60, 512, 86])==(batch,features,temp)
     
-        
+        print('output se', output.shape)
         #output = self.global_pool(output)
         print("features",output.shape)
         output = output.permute(2,0, 1)#(temp,batch,features)
@@ -242,6 +242,84 @@ class SEInceptionLayer(nn.Module):
         y = self.avg_pool(x).view(batch_size, channel_size)
         y = self.fc(y).view(batch_size, channel_size, 1)
         return x * y.expand_as(x)+x
+
+class SEEmbedding(nn.Module):
+    def __init__(self,dropout=0.5):
+        super(SEEmbedding, self).__init__()
+
+        #self.channel_sizes = [16, 32, 32, 32, 32, 64, 64, 64, 64, 128, 128]
+        #self.channel_sizes = [16, 32, 32, 64, 64, 128, 128, 128, 128, 256, 256,256,256,512,512,512]
+        self.channel_sizes =[16,32,64,128,256,512,512]
+        kernel_size =11
+        self.dropout=dropout
+        self.features = nn.Sequential( 
+            
+            #16
+            nn.BatchNorm1d(1),
+            nn.Conv1d(1, self.channel_sizes[0], kernel_size=kernel_size),
+            nn.BatchNorm1d(self.channel_sizes[0]),
+            nn.ReLU(),
+
+        
+            nn.Conv1d(self.channel_sizes[0], self.channel_sizes[1], kernel_size=kernel_size), #,stride=(2,1)
+            nn.BatchNorm1d(self.channel_sizes[1]),
+            nn.ReLU(),
+           # nn.Dropout(p=0.5),
+            
+            nn.Conv1d(self.channel_sizes[1], self.channel_sizes[2], kernel_size=kernel_size), #,stride=(2,1)
+            nn.BatchNorm1d(self.channel_sizes[2]),
+            nn.ReLU(),
+           # nn.Dropout(p=0.5),
+            nn.AvgPool1d(2, stride=2),
+            
+            nn.Conv1d(self.channel_sizes[2], self.channel_sizes[3], kernel_size=kernel_size), #,stride=(2,1)
+            nn.BatchNorm1d(self.channel_sizes[3]),
+            nn.ReLU(),
+            #nn.Dropout(p=0.5),
+            SEInceptionLayer(self.channel_sizes[3]),
+            
+            nn.Conv1d(self.channel_sizes[3], self.channel_sizes[4], kernel_size=kernel_size), #,stride=(2,1)
+            nn.BatchNorm1d(self.channel_sizes[4]),
+            nn.ReLU(),
+            #nn.Dropout(p=0.5),
+            SEInceptionLayer(self.channel_sizes[4]),
+            
+            nn.AvgPool1d(2, stride=2),
+            nn.Conv1d(self.channel_sizes[4], self.channel_sizes[5], kernel_size=kernel_size), #,stride=(2,1)
+            nn.BatchNorm1d(self.channel_sizes[5]),
+            nn.ReLU(),
+            #nn.Dropout(p=0.5)
+            SEInceptionLayer(self.channel_sizes[5]),
+            
+            nn.Conv1d(self.channel_sizes[5], self.channel_sizes[6], kernel_size=kernel_size), #,stride=(2,1)
+            nn.BatchNorm1d(self.channel_sizes[6]),
+            nn.ReLU(),
+            #nn.Dropout(p=0.5),
+            SEInceptionLayer(self.channel_sizes[6]),
+                
+            # nn.AvgPool1d(2, stride=2),
+            # nn.Conv1d(self.channel_sizes[6], self.channel_sizes[7], kernel_size=kernel_size), #,stride=(2,1)
+            # nn.BatchNorm1d(self.channel_sizes[7]),
+            # nn.ReLU(),
+            # #nn.Dropout(p=0.5),
+            # SEInceptionLayer(self.channel_sizes[7]),
+            
+            # nn.Conv1d(self.channel_sizes[7], self.channel_sizes[8], kernel_size=kernel_size), #,stride=(2,1)
+            # nn.BatchNorm1d(self.channel_sizes[8]),
+            # nn.ReLU(),
+            # #nn.Dropout(p=0.5),
+            # SEInceptionLayer(self.channel_sizes[8]),
+         
+            )
+    
+    
+    def forward(self, inputs): 
+        act_batch_size = inputs.size(0)
+        inputs = inputs.view(act_batch_size, 1, -1)
+        #print(inputs.shape)
+        output = self.features(inputs) 
+        return output
+    
 
 class ConvNetSEComponent(nn.Module):
     """

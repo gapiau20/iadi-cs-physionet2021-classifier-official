@@ -297,8 +297,9 @@ def train(model, loader, f_loss, optimizer,lr_scheduler ,device, weights, classe
         optimizer.zero_grad()
         train_loss.backward()
         optimizer.step()
-        if lr_scheduler!=None:
-            lr_scheduler.step()
+        # if lr_scheduler!=None:
+        #     lr_scheduler.step()
+        lr_scheduler.step()
         
         #stack tensors to compute training metrics
         loss.append(train_loss)
@@ -309,14 +310,15 @@ def train(model, loader, f_loss, optimizer,lr_scheduler ,device, weights, classe
 
     running_loss = torch.tensor(loss).mean()
     preds = torch.cat(preds)
-   # preds = torch.ones_like(preds)
     preds = preds.to('cpu').detach().numpy()
     targets = torch.cat(targets).to('cpu').detach().numpy()
 
-    print('in train, preds size',preds.shape)
-    print('in train, targets size',targets.shape)
-    running_accuracy = compute_accuracy(targets,preds)
-    F1_Score , F1_Score_classe = compute_f_measure(targets,preds)
+    # running_accuracy = compute_accuracy(targets,preds)
+    # F1_Score , F1_Score_classe = compute_f_measure(targets,preds)
+
+    #remove some metrics calculations to speed up the code
+    running_accuracy,F1_Score , F1_Score_classe = 0,0,0
+    
     challenge_metric = compute_challenge_metric(weights, targets, preds, classes, normal_class)
     print('training challenge metric', challenge_metric)
     return(running_loss,running_accuracy,F1_Score,challenge_metric)
@@ -350,10 +352,15 @@ def valid(model, loader, f_loss, device, weights, classes, normal_class,model_na
     
     #challenge metrics
     
-    running_accuracy = compute_accuracy(targets, preds)
-    F1_Score_val , F1_Score_val_classe = compute_f_measure(targets,preds)
+    # running_accuracy = compute_accuracy(targets, preds)
+    # F1_Score_val , F1_Score_val_classe = compute_f_measure(targets,preds)
+    # confusion_matrix = compute_confusion_matrices(targets,preds)
+    #for challenge submission
+    running_accuracy,F1_Score_val , F1_Score_val_classe = 0,0,0
+    confusion_matrix = 0
+    
     challenge_metric = compute_challenge_metric(weights, targets, preds, classes, normal_class)
-    confusion_matrix = compute_confusion_matrices(targets,preds)
+    
     return(confusion_matrix, running_loss,running_accuracy,F1_Score_val,challenge_metric)
 
 ##   Summary writing functions   ##
@@ -555,21 +562,7 @@ def load_labels(label_files, classes):
     return labels
 
 
-# def class_weight(csv_file,order=1):
-#     '''
-#     compute class weights for the trainin
-#     parameters : 
-#     csv file (dx_mapping scored or unscored.csv)
-#     order (default 1) : exponent
-    
-#     '''
-#     class_df = pd.read_csv(csv_file)
-#     pos = torch.tensor(class_df['Total'])
-#     tot = pos.sum()
-    
-#     Wn = ((tot-pos)/pos)**order
 
-#     return Wn
 
 def class_weight(dx_csv_file, scored_classes, order = 1):
     classes_df = pd.read_csv(dx_csv_file)

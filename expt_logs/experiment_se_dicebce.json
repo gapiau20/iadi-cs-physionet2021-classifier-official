@@ -1,11 +1,11 @@
 {
-    "expt_tag": "weighted_se_dicebce_sgd_cyclic_fold1",
+    "expt_tag": "weighted_se_dicebce_sgd_cyclic_fold1_official",
    "logdir": "./expt_logs/",
    "data_directory": "/physionet/training_data/",
    "model_directory": "/physionet/model/",
    "model_name": "trans",
    "num_epochs": 50,
-   "batch_size": 60,
+   "batch_size": 64,
    "kept_classes": 26,
    "shuffle_dataset": true,
    "validation_split": 0.25,

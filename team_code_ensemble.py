@@ -64,7 +64,7 @@ def training_code(data_directory, model_directory):
     for f in expt_files : 
         expt = exp_supervision.ExpSupervisor(data_dir=data_directory,model_dir=model_directory)
         expt.load(os.path.join(expt_dir,f))
-        arch, mod_name, thr = run_experiment(data_directory, model_directory,expt)
+        classes, leads, arch, mod_name, thr = run_experiment(data_directory, model_directory,expt)
         architectures.append(arch)
         model_names.append(model_names)
         thresholds.append(thresholds)
@@ -74,7 +74,7 @@ def training_code(data_directory, model_directory):
     # n_cpu=4
     # pool = mp.Pool(n_cpu)
     # pool.starmap(launch_expt,[(data_directory,model_directory,expt_dir,f) for f in expt_files])
-    
+    save_meta_model(model_directory,classes, leads, architectures, model_names, thr)
     
     return
 def launch_expt(data_directory,model_directory,expt_dir,f):
@@ -137,6 +137,8 @@ def run_experiment(data_directory,model_directory,expt):
     
     #prepare class weights
     challenge_classes = [next(iter(i)) for i in classes]
+    print('challenge classes')
+    print(challenge_classes)
     saved_classes = classes
     pos_weight = utils.class_weight(dx_mapping_csv,challenge_classes)
 
@@ -254,18 +256,18 @@ def run_experiment(data_directory,model_directory,expt):
     dropout=expt.dropout
 
     models = nn.ModuleDict({
-#        'nora':new_model.OldNora_ConvNet(),
- #       'noraTransform':new_model.NoraTransform(),
+        'nora':new_model.OldNora_ConvNet(),
+        'noraTransform':new_model.NoraTransform(),
         'se':new_model.ConvNetSEClassifier(dropout=expt.dropout),
-  #      'seTransform':new_model.SETransformer()
+        'seTransform':new_model.SETransformer()
     })
     model = models[expt.model]
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
-    # if expt.retraining:
-    #     print('starting from a pretrained model : ',expt.pretrained_model_name)
-    #     utils.load_pretrained_model(model, expt.pretrained_model_name,model_directory)
+    if expt.retraining:
+        print('starting from a pretrained model : ',expt.pretrained_model_name)
+        utils.load_pretrained_model(model, expt.pretrained_model_name,model_directory)
 
     # Loss and optimizer
     pos_weight = pos_weight.to(device)#class weight to same device as the other tensors
@@ -273,35 +275,39 @@ def run_experiment(data_directory,model_directory,expt):
 
 
     criteria = {
-#        'bcelogits':nn.BCEWithLogitsLoss(pos_weight=pos_weight),
-#        'sign':new_model.SignLoss(class_weights=pos_weight),
+        'bcelogits':nn.BCEWithLogitsLoss(pos_weight=pos_weight),
+        'sign':new_model.SignLoss(class_weights=pos_weight),
         'dicebce':new_model.DiceBCELoss(classes_weights=pos_weight),
-#        'dicesign':new_model.DiceSignLoss(classes_weights=pos_weight)
+        'dicesign':new_model.DiceSignLoss(classes_weights=pos_weight)
     }
     
     criterion = criteria[expt.criterion]
 
     optimizers= {
         'sgd':torch.optim.SGD(model.parameters(), lr=expt.adam_lr, momentum=0.9),
-#        'adam':torch.optim.Adam(model.parameters(), lr=expt.adam_lr),
-#        'adam_l2':torch.optim.Adam(model.parameters(),lr=expt.adam_lr, weight_decay=expt.adam_weight_decay),
-#        'noam':NoamOptimizer(model.parameters(), d_model=expt.noam_d_model)
+        'adam':torch.optim.Adam(model.parameters(), lr=expt.adam_lr),
+        'adam_l2':torch.optim.Adam(model.parameters(),lr=expt.adam_lr, weight_decay=expt.adam_weight_decay),
+        'noam':NoamOptimizer(model.parameters(), d_model=expt.noam_d_model)
     }
     optimizer = optimizers[expt.optimizer] 
 
     #schedulers for each epoch
 
+    #lambda lr (warmup and decay)
+    eta = expt.adam_lr#max lr for lambda function
+    Twarm = num_epochs//5#warmup time
+ #   lambda1 = lambda epoch : eta*epoch/Twarm if epoch <Twarm else 0.5*(1+torch.cos(np.pi*epoch/num_epochs))*eta
     schedulers = {
         'step':StepLR(optimizer, step_size=expt.step_step_size, gamma=expt.step_gamma),
-
+#        'lambda':LambdaLR(optimizer,lr_lambda=lambda1)
     }
     scheduler = schedulers[expt.scheduler]
     #schedulers for every batch iteration
     lr_schedulers={
         'none':None,
         'cyclic':CyclicLR(optimizer,base_lr=expt.cyclic_base_lr,max_lr=expt.cyclic_max_lr),
-
-       # 'cos':CosineAnnealingWarmRestarts(optimizer,expt.cos_T0,eta_min=expt.cos_eta_min),
+#        'cyclic':CyclicLR(optimizer,base_lr=expt.cyclic_base_lr,max_lr=expt.cyclic_max_lr,mode=expt.cyclic_mode,gamma=expt.cyclic_gamma),
+        'cos':CosineAnnealingWarmRestarts(optimizer,expt.cos_T0,eta_min=expt.cos_eta_min),
         }
     lr_scheduler = lr_schedulers[expt.lr_scheduler]
     
@@ -350,7 +356,7 @@ def run_experiment(data_directory,model_directory,expt):
         print(f'Validation : Epoch [{epoch+1}/{num_epochs}], Loss [{val_loss:.4f}], Accuracy [{val_acc:.4f}], F1_score [{val_f1:.4f}], Challenge_metric [{val_cmetric:.4f}]')
         
         #Print_confusion_matrix
-        #print('Printing confusion matrix of epoch'+str(epoch))
+        print('Printing confusion matrix of epoch'+str(epoch))
 
         #save best model
         if best_metric_val is None or val_cmetric>best_metric_val:
@@ -364,31 +370,31 @@ def run_experiment(data_directory,model_directory,expt):
             print('val_cmetric',val_cmetric,'best_metric_val',best_metric_val)
 
         
-        # fig, ax = plt.subplots(7, 4, figsize=(10, 8))
-        # for axes, cfs_matrix, classe_name in zip(ax.flatten(), confusion_matrix, challenge_classes):
-        #     utils.print_confusion_matrix(cfs_matrix, axes, classe_name, ['N','Y'])
-        # fig.text(0.5, 0.04, 'True', ha='center')
-        # fig.text(0.04, 0.5, 'Predicted ', va='center', rotation='vertical')
-        # plt.savefig('confusion_matrix_epoch_'+str(epoch)+'.png')
+        fig, ax = plt.subplots(7, 4, figsize=(10, 8))
+        for axes, cfs_matrix, classe_name in zip(ax.flatten(), confusion_matrix, challenge_classes):
+            utils.print_confusion_matrix(cfs_matrix, axes, classe_name, ['N','Y'])
+        fig.text(0.5, 0.04, 'True', ha='center')
+        fig.text(0.04, 0.5, 'Predicted ', va='center', rotation='vertical')
+        plt.savefig('confusion_matrix_epoch_'+str(epoch)+'.png')
         
         scheduler.step()
         print('Epoch-{0} lr: {1}'.format(epoch+1, optimizer.param_groups[0]['lr']))
 
-        # history_file.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(epoch,
-        #                                                 train_loss, train_acc,train_f1,train_cmetric,
-        #                                                 val_loss, val_acc,val_f1,val_cmetric,optimizer.param_groups[0]['lr']))
-
+        history_file.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(epoch,
+                                                        train_loss, train_acc,train_f1,train_cmetric,
+                                                        val_loss, val_acc,val_f1,val_cmetric,optimizer.param_groups[0]['lr']))
+        #model_checkpoint.update(val_loss, model)
     
         #########################################################################
         writer.add_scalar('Loss/train', train_loss, epoch)
         writer.add_scalar('Loss/validation',val_loss , epoch)
-        #writer.add_scalar('Acuuracy/train', train_acc, epoch)
-        #writer.add_scalar('Acuuracy/validation', val_acc, epoch)
-        #writer.add_scalar('training_F1', train_f1 , epoch) 
+        writer.add_scalar('Acuuracy/train', train_acc, epoch)
+        writer.add_scalar('Acuuracy/validation', val_acc, epoch)
+        writer.add_scalar('training_F1', train_f1 , epoch) 
         writer.add_scalar('ChallengeMetric/train', train_cmetric , epoch) 
        
         
-        #writer.add_scalar('validation_F1', val_f1 , epoch) 
+        writer.add_scalar('validation_F1', val_f1 , epoch) 
         writer.add_scalar('ChallengeMetric/validation', val_cmetric , epoch) 
         writer.add_scalar('Learning_rate', optimizer.param_groups[0]['lr'] , epoch) 
     
@@ -405,13 +411,14 @@ def run_experiment(data_directory,model_directory,expt):
     lead_set2 = [ 'I', 'II']
 
     #model calibration
+    print('calibration step')
     thresholds_opt = 0.5
-
-
-
+    #thresholds_opt = utils.calibrate(model, validloader,weights, classes, normal_class, device)
     
-    save_model(model_directory, leads, saved_classes,  model, model_name, recordings_rescaling,thresholds_opt)    
-    return expt.model, model_name, thresholds_opt
+    
+    save_model(model_directory, leads, saved_classes,  model, model_name, recordings_rescaling,thresholds_opt)#imputer,
+    #return model_directory, leads, saved_classes,  model, model_name, recordings_rescaling
+    return saved_classes, leads, expt.model, model_name, thresholds_opt
 ################################################################################
 #
 # Running trained model function
@@ -422,26 +429,26 @@ def run_experiment(data_directory,model_directory,expt):
 def run_model(model, header, recording):
     classes = model['classes']
     leads = model['leads']
-    rescaling = model['rescaling']
+    #rescaling = model['rescaling']
+    rescaling = [0,1]
 
     #load classifier
-    classifier = model['classifier']
-    #print(classifier)
+
     #load classifier model state dict
-    model_path = os.path.join(model['model_dir'],'best_'+model['model_name']+".pt")
-    print(model_path)
+    #model_path = os.path.join(model['model_dir'],'best_'+model['model_name']+".pt")
+    #print(model_path)
     classifier = new_model.ConvNetSEClassifier()
     
     classifiers = nn.ModuleDict({
-#        'nora':new_model.OldNora_ConvNet(),
-#        'noraTransform':new_model.NoraTransform(),
+        'nora':new_model.OldNora_ConvNet(),
+        'noraTransform':new_model.NoraTransform(),
         'se':new_model.ConvNetSEClassifier(),
         #'seTransform':new_model.SETransformer()
     })
     classifier = classifiers['se']
-    
+    classifier = new_model.EnsembleModel(classifiers,model['model_names'],model['model_params'],model['model_dir'])
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    classifier.load_state_dict(torch.load(model_path))
+    #classifier.load_state_dict(torch.load(model_path))
     Threshold=0.5
     #Threshold = 1e-15
     #Threshold=torch.tensor(model['thresholds']).to(device)
@@ -498,17 +505,41 @@ def save_model(model_directory, leads, classes, classifier,model_name="",rescali
     
     joblib.dump(d, filename, protocol=0)
 
+def save_meta_model(model_directory,cls, leads, architectures, model_names, thr):
+    """
+    save into a json file all the information to recover all the experiment models 
+    """
+    print('save meta model')
+    print('models to save ', model_names)
+    filename = os.path.join(model_directory,"meta_model_file.json")
+    print(filename)
+    classes_to_save = [next(iter(i)) for i in cls]
+    print(classes_to_save)
+    metadata = {
+        'classes':classes_to_save,
+        'leads':leads,
+        'model_names':architectures,
+        'model_params':model_names
+        }
+    with open(filename,'w') as fp:
+        json.dump(metadata, fp,indent=3)
+    return
+    
 # Load a trained model. This function is *required*. Do *not* change the arguments of this function.
 def load_model(model_directory, leads):
     filename = os.path.join(model_directory, get_model_filename(leads))
-    model = joblib.load(filename)
+    #model = joblib.load(filename)
+    with open(filename) as meta_file:
+        model = json.load(meta_file)
     model['model_dir'] = model_directory
     return model
 
 # Define the filename(s) for the trained models. This function is not required. You can change or remove it.
 def get_model_filename(leads):
     leads = ['I','II','III','aVR','aVL','aVF','V1','V2','V3','V4','V5','V6']
-    return 'model_' + '-'.join(sort_leads(leads)) + '.sav'
+    return 'meta_model.json'
+#    return 'model_' + '-'.join(sort_leads(leads)) + '.sav'
+
 
 ################################################################################
 #
