@@ -7,6 +7,8 @@ Julien Oster
 
 Maintainer : pierre.aublin@inserm.fr
 
+The license applied is the one specified by the PhysioNet/Computing in Cardiology Challenge 2021. 
+
  Based on 
 # Python example code for the PhysioNet/Computing in Cardiology Challenge 2021
 
