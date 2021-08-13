@@ -563,7 +563,6 @@ def load_labels(label_files, classes):
 
 
 
-
 def class_weight(dx_csv_file, scored_classes, order = 1):
     classes_df = pd.read_csv(dx_csv_file)
     pos = []
@@ -741,7 +740,8 @@ def calibrate(model,loader,weights, classes,normal_class, device):
     model.eval()
     values = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]
 
-    threshold = torch.zeros((1,len(classes))).to('cpu')
+#    threshold = torch.zeros((1,len(classes))).to('cpu')
+    threshold = 0.5*torch.ones((1,len(classes))).to('cpu')
     best_metric=-1
     #compute the classifier output probabilities
     with torch.no_grad():
@@ -762,18 +762,20 @@ def calibrate(model,loader,weights, classes,normal_class, device):
         #stack probabilities and targets
         probabilities = torch.cat(probs).to('cpu')
         labels = torch.cat(targets).to('cpu').detach().numpy()
-        for idx in range(threshold.size(-1)):
-            best_thr_idx = 0
-            for thr in values :
+        for idx in range(threshold.size(-1)):#for each class 
+            best_idx_thr= 0.5 #reinitialize best thr value
+            #...??? best metric=-1
+            for thr in values :#for each threshold value
                 threshold[0,idx]=thr
                 preds = (probabilities>threshold).int()
                 preds = preds.to('cpu').detach().numpy()#numpy for computing challenge metric
            
                 challenge_metric = compute_challenge_metric(weights,labels,preds,classes,normal_class)
+                print('in utils.calibrate()')
                 print('idx',idx,'val',thr,'challenge metric',challenge_metric)
                 #if better challenge metric with the threshold
                 if challenge_metric > best_metric:
-                    best_idx_thr = thr
+                    best_idx_thr = thr #best threshold value for the specified index
                     best_metric = challenge_metric
             #set the best threshold at the idx
             threshold[0,idx] = best_idx_thr

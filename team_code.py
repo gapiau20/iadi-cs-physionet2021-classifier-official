@@ -1,4 +1,4 @@
-3#!/usr/bin/env python
+#!/usr/bin/env python
 
 # Edit this script to add your team's training code.
 # Some functions are *required*, but you can edit most parts of the required functions, remove non-required functions, and add your own functions.
@@ -139,7 +139,6 @@ def run_experiment(data_directory,model_directory,expt):
     challenge_classes = [next(iter(i)) for i in classes]
     saved_classes = classes
     pos_weight = utils.class_weight(dx_mapping_csv,challenge_classes)
-
     #rescale the recordings
     recordings_rescaling = [recordings_tensor.mean(), recordings_tensor.std()]#min,max
     recordings_tensor = (recordings_tensor-recordings_rescaling[0])/recordings_rescaling[1]
@@ -184,6 +183,7 @@ def run_experiment(data_directory,model_directory,expt):
     if expt.weight_batches==True:
         print('weighting_batches')
         batch_weights=utils.weight_db_classes(train_headers,batch_weights,dx_mapping_csv,challenge_classes)
+        #tryout :
 
     else :
         print('not weighting batches')
@@ -198,6 +198,14 @@ def run_experiment(data_directory,model_directory,expt):
     tmp_train=torch.stack(tmp_train)
     labels_train=torch.stack(labels_train)
     batch_weights=torch.stack(batch_weights)
+
+    #tryout normalization labels
+    #tot_active_labels = labels_train.sum(dim=1).view(-1,1).repeat(1,labels_train.size(1))
+    #tot_inactive_labels = tot_active_labels.size(1)-tot_active_labels
+    #batch_weights*=((1+tot_active_labels)/(1+tot_inactive_labels))
+    #batch_weights*=((1+tot_inactive_labels)/(1+tot_active_labels))
+    #batch_weights*=1/torch.maximum(torch.ones_like(tot_active_labels),tot_active_labels)
+    
     records_train=tmp_train[:,0,:]
     new_labels_train=labels_train
     new_weights_train=batch_weights
@@ -406,7 +414,7 @@ def run_experiment(data_directory,model_directory,expt):
 
     #model calibration
     thresholds_opt = 0.5
-
+    thresholds_opt = utils.calibrate(model,validloader,weights,classes,normal_class,device)
 
 
     
@@ -442,9 +450,9 @@ def run_model(model, header, recording):
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     classifier.load_state_dict(torch.load(model_path))
-    Threshold=0.5
+    #Threshold=0.5
     #Threshold = 1e-15
-    #Threshold=torch.tensor(model['thresholds']).to(device)
+    Threshold=torch.tensor(model['thresholds']).to(device)
     classifier = classifier.to(device)
     
     #turn into evaluation mode, and don't track gradients

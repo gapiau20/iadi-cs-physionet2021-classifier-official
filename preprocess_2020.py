@@ -80,7 +80,11 @@ def center_pad(sig,duration,fs):
 
 #Preprocess_ECG_signals
 def preprocess(recording, fe, target_fs, duration, adc, baseline, leads):
-    """"""
+    """
+    return : 
+    recording_array 
+    recording_rms
+    """
     indices = list()
     available_leads=leads
     for lead in leads:
@@ -95,7 +99,8 @@ def preprocess(recording, fe, target_fs, duration, adc, baseline, leads):
     for lead_i in range(num_leads):
         #correct the voltage and baseline 
         ecg = (recording[lead_i,:]-baseline[lead_i])/adc[lead_i]
-
+        ecg_rms = np.sqrt(np.sum(ecg**2)/np.size(ecg))
+        
         #butter
         nyq = fe/2
         band=np.array(bandpass)/nyq
@@ -134,16 +139,37 @@ def preprocess(recording, fe, target_fs, duration, adc, baseline, leads):
         record_tensor.append(ecg_scaled)
 
 
-
-
-
-
     record_tensor = torch.stack(record_tensor)
+    return np.array(record_tensor) #nparray
 
+def get_header_features(header):
+    '''
+    returns features_array : 
+    [age,age_is_none, one_hot_is_male, one_hot_is_female, one_hot_is_non_specified_sex]
+    '''
+    features_array = np.zeros((1,5))
 
-    return np.array(record_tensor)
+    #age
+    age = get_age(header)
+    #if age non specified indicate it
+    if age is None:
+        features_array[0,0]=0
+        features_array[0,1]=1 #age is non indicated on first column [0,1,.,.,.]
+    else :
+        features_array=age
+    #sex
+    sex = get_sex(header)
+    if sex in ('Female', 'female', 'F', 'f'):
+        features_array[0,2]=1 #[.,.,1,0,0]
+    elif sex in ('Male', 'male', 'M', 'm'):
+        features_array[0,3]=1
+    else:
+        features_arrray[0,4]=1 #sex non specified
+
+    return features_array
+
     
-
+    
 
 def ecg_preprocessing(input_directory, classes_weights_file):
     #get headers
