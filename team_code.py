@@ -200,11 +200,11 @@ def run_experiment(data_directory,model_directory,expt):
     batch_weights=torch.stack(batch_weights)
 
     #tryout normalization labels
-    #tot_active_labels = labels_train.sum(dim=1).view(-1,1).repeat(1,labels_train.size(1))
+    tot_active_labels = labels_train.sum(dim=1).view(-1,1).repeat(1,labels_train.size(1))
     #tot_inactive_labels = tot_active_labels.size(1)-tot_active_labels
     #batch_weights*=((1+tot_active_labels)/(1+tot_inactive_labels))
     #batch_weights*=((1+tot_inactive_labels)/(1+tot_active_labels))
-    #batch_weights*=1/torch.maximum(torch.ones_like(tot_active_labels),tot_active_labels)
+    batch_weights*=1/torch.maximum(torch.ones_like(tot_active_labels),tot_active_labels)
     
     records_train=tmp_train[:,0,:]
     new_labels_train=labels_train
