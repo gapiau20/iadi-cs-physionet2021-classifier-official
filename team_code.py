@@ -450,9 +450,9 @@ def run_model(model, header, recording):
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     classifier.load_state_dict(torch.load(model_path))
-    #Threshold=0.5
+    Threshold=0.5
     #Threshold = 1e-15
-    Threshold=torch.tensor(model['thresholds']).to(device)
+    #Threshold=torch.tensor(model['thresholds']).to(device)
     classifier = classifier.to(device)
     
     #turn into evaluation mode, and don't track gradients
